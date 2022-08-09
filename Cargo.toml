@@ -20,6 +20,7 @@ serde = { version = "1.0", features = ["derive"] }
 lazy_static = "1.4.0"
 vaultrs = "0.6.2"
 bincode = "1.3.3"
+mockall = "0.11.2"
 
 kbs-types = { git = "https://github.com/virtee/kbs-types", features = [ "tee-sev" ] }
 
