@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 pub mod attester;
 use attester::Attester;
+pub mod secrets_store;
 pub mod sev;
 
 #[derive(Eq, PartialEq)]

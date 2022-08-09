@@ -13,10 +13,15 @@ use kbs_types::{Attestation, Request, SevRequest, Tee};
 use uuid::Uuid;
 
 use reference_kbs::attester::Attester;
+use reference_kbs::secrets_store::{
+    get_secret_from_vault, get_secret_store, register_secret_store,
+};
 use reference_kbs::sev::SevAttester;
 use reference_kbs::{Session, SessionState};
 
 use rocket_sync_db_pools::database;
+
+//use std::thread;
 
 #[macro_use]
 extern crate diesel;
@@ -35,21 +40,6 @@ table! {
     measurements (workload_id) {
         workload_id -> Text,
         launch_measurement -> Text,
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Queryable, Insertable)]
-#[serde(crate = "rocket::serde")]
-#[table_name = "secrets"]
-struct Secret {
-    key_id: String,
-    secret: String,
-}
-
-table! {
-    secrets (key_id) {
-        key_id -> Text,
-        secret -> Text,
     }
 }
 
@@ -141,7 +131,6 @@ async fn attest(
 
 #[get("/key/<key_id>")]
 async fn key(
-    db: Db,
     state: &State<SessionState>,
     cookies: &CookieJar<'_>,
     key_id: &str,
@@ -163,19 +152,11 @@ async fn key(
     }
 
     let owned_key_id = key_id.to_string();
-    let secrets_entry: Secret = db
-        .run(move |conn| {
-            secrets::table
-                .filter(secrets::key_id.eq(owned_key_id))
-                .first(conn)
-        })
-        .await
-        .map_err(|e| Unauthorized(Some(e.to_string())))?;
-
+    let secret_clear = get_secret_from_vault(&owned_key_id).await;
     let mut session = session_lock.lock().unwrap();
     let secret = session
         .attester()
-        .encrypt_secret(secrets_entry.secret.as_bytes())
+        .encrypt_secret(&secret_clear.as_bytes())
         .unwrap();
     Ok(secret)
 }
@@ -183,7 +164,11 @@ async fn key(
 #[launch]
 fn rocket() -> _ {
     rocket::build()
-        .mount("/kbs/v0", routes![index, auth, attest, key])
+        .mount("/kbs/v0", routes![index, auth, attest, key,])
+        .mount(
+            "/secret-store",
+            routes![register_secret_store, get_secret_store],
+        )
         .manage(SessionState {
             sessions: RwLock::new(HashMap::new()),
         })
