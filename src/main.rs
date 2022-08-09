@@ -1,3 +1,5 @@
+#![feature(option_result_contains)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -100,7 +102,6 @@ async fn attest(
         .get("session_id")
         .ok_or_else(|| BadRequest(Some("Missing cookie".to_string())))?
         .value();
-
     // We're just cloning an Arc, looks like a false positive to me...
     #[allow(clippy::significant_drop_in_scrutinee)]
     let session_lock = match state.sessions.read().unwrap().get(session_id) {
@@ -139,7 +140,6 @@ async fn key(
         .get("session_id")
         .ok_or_else(|| Unauthorized(Some("Missing cookie".to_string())))?
         .value();
-
     // We're just cloning an Arc, looks like a false positive to me...
     #[allow(clippy::significant_drop_in_scrutinee)]
     let session_lock = match state.sessions.read().unwrap().get(session_id) {
@@ -164,7 +164,7 @@ async fn key(
 #[launch]
 fn rocket() -> _ {
     rocket::build()
-        .mount("/kbs/v0", routes![index, auth, attest, key,])
+        .mount("/kbs/v0", routes![index, auth, attest, key])
         .mount(
             "/secret-store",
             routes![register_secret_store, get_secret_store],
@@ -173,4 +173,49 @@ fn rocket() -> _ {
             sessions: RwLock::new(HashMap::new()),
         })
         .attach(Db::fairing())
+}
+
+// TODO move this to a file for functional tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reference_kbs::attester::AttesterError;
+    use reference_kbs::secrets_store::{write_secret_store, SecretStore};
+    use rocket::http::Status;
+    use rocket::local::blocking::Client;
+    use std::str;
+
+    #[test]
+    fn test_key() {
+        // TODO set env variables
+        write_secret_store(SecretStore::new("http://127.0.0.1:8200", "myroot"));
+        let mut mockAttester = reference_kbs::attester::MockAttester::new();
+        mockAttester
+            .expect_encrypt_secret()
+            .returning(|x| -> Result<Value, AttesterError> {
+                Ok(json!(str::from_utf8(&x).unwrap()))
+            });
+        let state = SessionState {
+            sessions: RwLock::new(HashMap::new()),
+        };
+        let mut session = Session::new(
+            "test-session".to_string(),
+            "fakeid".to_string(),
+            Box::new(mockAttester),
+        );
+        session.approve();
+        state
+            .sessions
+            .write()
+            .unwrap()
+            .insert("test-session".to_string(), Arc::new(Mutex::new(session)));
+        let rocket = rocket::build().mount("/", routes![key]).manage(state);
+        let client = Client::new(rocket).expect("valid rocket instance");
+        let response = client
+            .get("/key/fakeid")
+            .cookie(Cookie::new("session_id", "test-session"))
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.into_string().unwrap().contains("test"), true);
+    }
 }
