@@ -160,7 +160,7 @@ mod tests {
             url: url.to_string(),
             token: token.to_string(),
         });
-        let secret = get_secret_from_vault("guestowner1/workload-id/secret").await;
+        let secret = get_secret_from_vault("fakeid").await;
         assert_eq!(secret.secret, "test".to_string());
     }
 }

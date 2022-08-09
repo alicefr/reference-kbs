@@ -1,10 +1,10 @@
 #!/bin/bash
 
-docker exec -ti vault vault kv put -mount=secret guestowner1/workload-id/secret secret=test
-docker exec -ti vault vault kv get -mount=secret guestowner1/workload-id/secret
+docker exec -ti vault vault kv put -mount=secret fakeid secret=test
+docker exec -ti vault vault kv get -mount=secret fakeid
 
 docker exec -ti vault sh -c 'tee readonly.hcl <<EOF
- path "secret/data/guestowner1/workload-id/*" {
+ path "secret/data/fakeid" {
    capabilities = ["read"]
  }
 EOF
