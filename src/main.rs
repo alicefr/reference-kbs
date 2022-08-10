@@ -15,11 +15,9 @@ use kbs_types::{Attestation, Request, SevRequest, Tee};
 use uuid::Uuid;
 
 use reference_kbs::attester::Attester;
-use reference_kbs::secrets_store::{
-    get_secret_from_vault, get_secret_store, register_secret_store,
-};
+use reference_kbs::secrets_store::SecretStore;
 use reference_kbs::sev::SevAttester;
-use reference_kbs::{Session, SessionState};
+use reference_kbs::{get_secret_store, key, register_secret_store, Session, SessionState};
 
 use rocket_sync_db_pools::database;
 
@@ -130,37 +128,6 @@ async fn attest(
     Ok(())
 }
 
-#[get("/key/<key_id>")]
-async fn key(
-    state: &State<SessionState>,
-    cookies: &CookieJar<'_>,
-    key_id: &str,
-) -> Result<Value, Unauthorized<String>> {
-    let session_id = cookies
-        .get("session_id")
-        .ok_or_else(|| Unauthorized(Some("Missing cookie".to_string())))?
-        .value();
-    // We're just cloning an Arc, looks like a false positive to me...
-    #[allow(clippy::significant_drop_in_scrutinee)]
-    let session_lock = match state.sessions.read().unwrap().get(session_id) {
-        Some(s) => s.clone(),
-        None => return Err(Unauthorized(Some("Invalid cookie".to_string()))),
-    };
-
-    if !session_lock.lock().unwrap().is_valid() {
-        return Err(Unauthorized(Some("Invalid session".to_string())));
-    }
-
-    let owned_key_id = key_id.to_string();
-    let secret_clear = get_secret_from_vault(&owned_key_id).await;
-    let mut session = session_lock.lock().unwrap();
-    let secret = session
-        .attester()
-        .encrypt_secret(&secret_clear.as_bytes())
-        .unwrap();
-    Ok(secret)
-}
-
 #[launch]
 fn rocket() -> _ {
     rocket::build()
@@ -171,51 +138,7 @@ fn rocket() -> _ {
         )
         .manage(SessionState {
             sessions: RwLock::new(HashMap::new()),
+            secret_store: RwLock::new(SecretStore::new("http://127.0.0.1:8200", "myroot")),
         })
         .attach(Db::fairing())
-}
-
-// TODO move this to a file for functional tests
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use reference_kbs::attester::AttesterError;
-    use reference_kbs::secrets_store::{write_secret_store, SecretStore};
-    use rocket::http::Status;
-    use rocket::local::blocking::Client;
-    use std::str;
-
-    #[test]
-    fn test_key() {
-        // TODO set env variables
-        write_secret_store(SecretStore::new("http://127.0.0.1:8200", "myroot"));
-        let mut mockAttester = reference_kbs::attester::MockAttester::new();
-        mockAttester
-            .expect_encrypt_secret()
-            .returning(|x| -> Result<Value, AttesterError> {
-                Ok(json!(str::from_utf8(&x).unwrap()))
-            });
-        let state = SessionState {
-            sessions: RwLock::new(HashMap::new()),
-        };
-        let mut session = Session::new(
-            "test-session".to_string(),
-            "fakeid".to_string(),
-            Box::new(mockAttester),
-        );
-        session.approve();
-        state
-            .sessions
-            .write()
-            .unwrap()
-            .insert("test-session".to_string(), Arc::new(Mutex::new(session)));
-        let rocket = rocket::build().mount("/", routes![key]).manage(state);
-        let client = Client::new(rocket).expect("valid rocket instance");
-        let response = client
-            .get("/key/fakeid")
-            .cookie(Cookie::new("session_id", "test-session"))
-            .dispatch();
-        assert_eq!(response.status(), Status::Ok);
-        assert_eq!(response.into_string().unwrap().contains("test"), true);
-    }
 }
